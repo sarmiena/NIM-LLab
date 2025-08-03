@@ -441,11 +441,7 @@ def download_gguf_files(model_repo: str, base_work_dir: str) -> str:
 
     while True:
         # Get GGUF model repository from user
-        gguf_repo = input(f"\nEnter GGUF model repository (format: profile/model-name) or press Enter to use '{model_repo}': ").strip()
-
-        if not gguf_repo:
-            gguf_repo = model_repo
-            print(f"Using base model repository: {gguf_repo}")
+        gguf_repo = input(f"\nEnter GGUF model repository (format: profile/model-name): ").strip()
 
         if '/' not in gguf_repo:
             print(red_text("Please use the format: profile/model-name (e.g., bartowski/Llama-3.2-3B-Instruct-GGUF)"))
