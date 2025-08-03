@@ -1,6 +1,16 @@
-from huggingface_hub import hf_hub_download, list_repo_files, RepositoryNotFoundError
+from huggingface_hub import hf_hub_download, list_repo_files
 from .colors import green_text, red_text, yellow_text
 import os
+
+# Try to import RepositoryNotFoundError, fall back to general exception handling
+try:
+    from huggingface_hub.utils import RepositoryNotFoundError
+except ImportError:
+    try:
+        from huggingface_hub import RepositoryNotFoundError
+    except ImportError:
+        # If we can't import it, we'll use a general Exception
+        RepositoryNotFoundError = Exception
 
 
 def download_model_configs(base_work_dir: str) -> str:
@@ -42,26 +52,28 @@ def download_model_configs(base_work_dir: str) -> str:
 
         # Find the actual paths of required files in the repository
         found_files = {}
-        for required_file in required_files:
-            # Look for the file anywhere in the repository structure
-            matching_files = [f for f in repo_files if f.endswith(required_file)]
-
-            if matching_files:
-                # If multiple matches, prefer root directory, then shortest path
-                best_match = min(matching_files, key=lambda x: (x.count('/'), len(x)))
-                found_files[required_file] = best_match
-                print(green_text(f"Found {required_file} at: {best_match}"))
-            else:
-                print(red_text(f"❌ {required_file} not found anywhere in repository"))
-
         try:
             # First, check if repository exists by trying to list files
+            repo_files = []  # Initialize here
             try:
                 repo_files = list_repo_files(
                     repo_id=model_repo,
                     token=os.getenv("HF_TOKEN")
                 )
                 print(green_text(f"✓ Repository {model_repo} found"))
+
+                for required_file in required_files:
+                    # Look for the file anywhere in the repository structure
+                    matching_files = [f for f in repo_files if f.endswith(required_file)]
+
+                    if matching_files:
+                        # If multiple matches, prefer root directory, then shortest path
+                        best_match = min(matching_files, key=lambda x: (x.count('/'), len(x)))
+                        found_files[required_file] = best_match
+                        print(green_text(f"Found {required_file} at: {best_match}"))
+                    else:
+                        raise Exception(f"{required_file} not found anywhere in repository")
+
             except RepositoryNotFoundError:
                 print(red_text(f"❌ Repository '{model_repo}' not found. Please check the model name and try again."))
                 continue
