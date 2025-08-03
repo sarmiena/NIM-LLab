@@ -1,7 +1,7 @@
 import os
 import getpass
 from lib.nim_selector import select_nim_version
-from lib.model_downloader import download_model_configs
+from lib.model_downloader import download_model_configs, download_gguf_files
 from lib.run_command import run_command
 from lib.colors import *
 from lib.utility import *
@@ -75,10 +75,45 @@ except Exception as e:
 print("\n🤗 Downloading HuggingFace model configuration...")
 config_dir = download_model_configs(base_work_dir)
 
-if config_dir:
+if not config_dir:
+    print(red_text("❌ Failed to download model configuration. Exiting."))
+    exit(1)
+
+print(green_text("✓ Model configuration downloaded successfully"))
+
+# Get the base model repository name for reference
+base_model_repo = None
+if os.environ.get("NIM_MODEL_DIR"):
+    # Extract model repo name from the directory path
+    model_dir_name = os.path.basename(os.environ["NIM_MODEL_DIR"])
+    base_model_repo = model_dir_name.replace("-", "/")
+
+print("\n📦 Downloading GGUF model files...")
+print(yellow_text("Now you need to select a GGUF model repository."))
+print(yellow_text("This can be the same as your base model or a different GGUF-specific repository."))
+
+if base_model_repo:
+    print(f"Your base model repository was: {base_model_repo}")
+
+final_model_dir = download_gguf_files(base_model_repo or "", base_work_dir)
+
+if final_model_dir:
     print(green_text("\n🎉 Setup completed successfully!"))
     print(f"Selected NIM version: {selected_version}")
-    print(f"Base Model config directory: {os.environ['NIM_MODEL_DIR']}")
+    print(f"Base model config directory: {os.environ['NIM_MODEL_DIR']}")
+    print(f"Final model directory (with GGUF files): {final_model_dir}")
+
+    # Update environment variable to point to final directory
+    os.environ["FINAL_MODEL_DIR"] = final_model_dir
+    print(green_text(f"✓ FINAL_MODEL_DIR set to: {final_model_dir}"))
+
+    print("\n📋 Summary:")
+    print(f"• Base model configs: {os.environ['NIM_MODEL_DIR']}")
+    print(f"• Complete model (configs + GGUF): {final_model_dir}")
+    print(f"• NIM Docker version: {selected_version}")
+
+    print(green_text("\n✅ Ready to start your GGUF NIM service!"))
+
 else:
-    print(red_text("❌ Failed to download model configuration. Exiting."))
+    print(red_text("❌ Failed to download GGUF files. Exiting."))
     exit(1)

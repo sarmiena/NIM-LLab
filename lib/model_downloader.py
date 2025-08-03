@@ -3,6 +3,8 @@ from .colors import green_text, red_text, yellow_text
 import os
 import shutil
 import glob
+import re
+from collections import defaultdict
 
 # Try to import RepositoryNotFoundError, fall back to general exception handling
 try:
@@ -54,7 +56,7 @@ def download_model_configs(base_work_dir: str) -> str:
 
         # Find the actual paths of required files in the repository
         found_files = {}
-        
+
         try:
             # First, check if repository exists by trying to list files
             repo_files = []  # Initialize here
@@ -148,12 +150,243 @@ def download_model_configs(base_work_dir: str) -> str:
     return None
 
 
+def extract_gguf_files(repo_files: list) -> dict:
+    """
+    Extract and organize GGUF files from repository file list.
+    Groups multi-part files together and removes part numbers from display.
+
+    Args:
+        repo_files (list): List of all files in the repository
+
+    Returns:
+        dict: Dictionary mapping display names to file lists
+    """
+    gguf_files = [f for f in repo_files if f.endswith('.gguf')]
+
+    if not gguf_files:
+        return {}
+
+    # Group multi-part files
+    grouped_files = defaultdict(list)
+
+    for file in gguf_files:
+        # Remove directory path for processing
+        filename = os.path.basename(file)
+
+        # Check for multi-part pattern (e.g., model-00001-of-00002.gguf)
+        multipart_match = re.match(r'^(.*)-\d+-of-\d+\.gguf$', filename)
+
+        if multipart_match:
+            # Multi-part file - use base name without part info
+            base_name = multipart_match.group(1) + '.gguf'
+            grouped_files[base_name].append(file)
+        else:
+            # Single file
+            grouped_files[filename].append(file)
+
+    # Sort the files within each group to ensure proper order for multi-part files
+    for key in grouped_files:
+        grouped_files[key].sort()
+
+    return dict(grouped_files)
+
+
+def display_gguf_menu(gguf_groups: dict) -> tuple:
+    """
+    Display available GGUF files and get user selection.
+
+    Args:
+        gguf_groups (dict): Dictionary mapping display names to file lists
+
+    Returns:
+        tuple: (selected_display_name, list_of_actual_files)
+    """
+    print("\nAvailable GGUF files:")
+    print("-" * 50)
+
+    # Sort by file size estimate (larger models typically have more descriptive names)
+    sorted_items = sorted(gguf_groups.items(), key=lambda x: (len(x[1]), x[0]))
+
+    for i, (display_name, file_list) in enumerate(sorted_items, 1):
+        parts_info = f" ({len(file_list)} parts)" if len(file_list) > 1 else ""
+        print(f"{i:2d}. {display_name}{parts_info}")
+
+    print("-" * 50)
+
+    while True:
+        try:
+            choice = input(f"Select a GGUF file (1-{len(sorted_items)}) or 'q' to quit: ").strip()
+
+            if choice.lower() == 'q':
+                print("Exiting...")
+                return None, None
+
+            choice_num = int(choice)
+            if 1 <= choice_num <= len(sorted_items):
+                selected_item = sorted_items[choice_num - 1]
+                display_name, file_list = selected_item
+                print(f"Selected: {display_name}")
+                if len(file_list) > 1:
+                    print(f"This will download {len(file_list)} parts")
+                return display_name, file_list
+            else:
+                print(f"Please enter a number between 1 and {len(sorted_items)}")
+
+        except ValueError:
+            print("Please enter a valid number or 'q' to quit")
+        except KeyboardInterrupt:
+            print("\nExiting...")
+            return None, None
+
+
+def download_gguf_files(model_repo: str, base_work_dir: str) -> str:
+    """
+    Download GGUF files from a HuggingFace model repository.
+
+    Args:
+        model_repo (str): HuggingFace model repository (profile/model-name)
+        base_work_dir (str): Base working directory for downloads
+
+    Returns:
+        str: Path to the final model directory, or None if failed
+    """
+
+    while True:
+        # Get GGUF model repository from user
+        gguf_repo = input(f"\nEnter GGUF model repository (format: profile/model-name) or press Enter to use '{model_repo}': ").strip()
+
+        if not gguf_repo:
+            gguf_repo = model_repo
+            print(f"Using base model repository: {gguf_repo}")
+
+        if '/' not in gguf_repo:
+            print(red_text("Please use the format: profile/model-name (e.g., bartowski/Llama-3.2-3B-Instruct-GGUF)"))
+            continue
+
+        print(f"\nScanning {gguf_repo} for GGUF files...")
+
+        try:
+            # List repository files
+            try:
+                repo_files = list_repo_files(
+                    repo_id=gguf_repo,
+                    token=os.getenv("HF_TOKEN")
+                )
+                print(green_text(f"✓ Repository {gguf_repo} found"))
+            except RepositoryNotFoundError:
+                print(red_text(f"❌ Repository '{gguf_repo}' not found. Please check the model name and try again."))
+                continue
+            except Exception as e:
+                print(red_text(f"❌ Error accessing repository: {e}"))
+                continue
+
+            # Extract and organize GGUF files
+            gguf_groups = extract_gguf_files(repo_files)
+
+            if not gguf_groups:
+                print(red_text(f"\n❌ No GGUF files found in repository: {gguf_repo}"))
+                print(yellow_text("Available files in repository:"))
+                for f in sorted(repo_files)[:20]:
+                    print(f"  {f}")
+                if len(repo_files) > 20:
+                    print(f"  ... and {len(repo_files) - 20} more files")
+
+                retry = input("Would you like to try a different repository? (y/n): ").strip().lower()
+                if retry != 'y':
+                    return None
+                continue
+
+            # Display menu and get selection
+            selected_display, selected_files = display_gguf_menu(gguf_groups)
+
+            if not selected_display:
+                return None
+
+            # Create directory structure: profile-model-name/selected-file-name/
+            model_dir_name = gguf_repo.replace("/", "-")
+            # Remove .gguf extension for directory name
+            file_dir_name = selected_display.replace(".gguf", "")
+            final_model_dir = os.path.join(os.environ["GGUF_WORK_DIR"], model_dir_name, file_dir_name)
+
+            os.makedirs(final_model_dir, exist_ok=True)
+            print(f"Created directory: {final_model_dir}")
+
+            # Download selected GGUF files
+            print(f"\nDownloading {len(selected_files)} GGUF file(s)...")
+            downloaded_files = []
+
+            for file_path in selected_files:
+                try:
+                    print(f"Downloading {file_path}...")
+                    downloaded_path = hf_hub_download(
+                        repo_id=gguf_repo,
+                        filename=file_path,
+                        local_dir=final_model_dir,
+                        token=os.getenv("HF_TOKEN")
+                    )
+                    downloaded_files.append(file_path)
+                    print(green_text(f"✓ {os.path.basename(file_path)} downloaded successfully"))
+
+                except Exception as e:
+                    print(red_text(f"❌ Error downloading {file_path}: {e}"))
+                    retry = input("Would you like to try a different model? (y/n): ").strip().lower()
+                    if retry != 'y':
+                        return None
+                    break
+            else:
+                # All GGUF files downloaded successfully
+                print(green_text(f"\n✓ Successfully downloaded {len(downloaded_files)} GGUF file(s)"))
+
+                # Copy config files from the base model directory to final directory
+                if os.environ.get("NIM_MODEL_DIR") and os.path.exists(os.environ["NIM_MODEL_DIR"]):
+                    print("Copying configuration files...")
+                    try:
+                        for file_name in ["config.json", "tokenizer.json", "tokenizer_config.json", "generation_config.json"]:
+                            src_path = os.path.join(os.environ["NIM_MODEL_DIR"], file_name)
+                            if os.path.exists(src_path):
+                                dst_path = os.path.join(final_model_dir, file_name)
+                                shutil.copy2(src_path, dst_path)
+                                print(green_text(f"✓ Copied {file_name}"))
+
+                        print(green_text("✓ Configuration files copied successfully"))
+                    except Exception as e:
+                        print(red_text(f"❌ Error copying config files: {e}"))
+                        return None
+                else:
+                    print(yellow_text("⚠️  No config files found to copy. Make sure to run download_model_configs first."))
+
+                print(f"Final model directory: {final_model_dir}")
+                return final_model_dir
+
+        except KeyboardInterrupt:
+            print(red_text("\n\nOperation cancelled by user."))
+            break
+        except Exception as e:
+            print(red_text(f"❌ Unexpected error: {e}"))
+            retry = input("Would you like to try a different repository? (y/n): ").strip().lower()
+            if retry != 'y':
+                break
+
+    return None
+
+
 # Example usage
 if __name__ == "__main__":
     base_work_dir = os.path.abspath(".")
+
+    # First download config files
     config_dir = download_model_configs(base_work_dir)
 
     if config_dir:
         print(green_text(f"\nConfig files ready at: {config_dir}"))
+
+        # Then download GGUF files
+        model_repo = input("Enter the base model repository name (used for config files): ").strip()
+        final_dir = download_gguf_files(model_repo, base_work_dir)
+
+        if final_dir:
+            print(green_text(f"\nComplete model ready at: {final_dir}"))
+        else:
+            print(red_text("\nFailed to download GGUF files."))
     else:
         print(red_text("\nNo config files downloaded."))
