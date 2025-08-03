@@ -239,6 +239,194 @@ def display_gguf_menu(gguf_groups: dict) -> tuple:
             return None, None
 
 
+def scan_local_gguf_files(gguf_work_dir: str) -> dict:
+    """
+    Scan for existing GGUF files in the local working directory.
+    Expected structure: gguf_work_dir/profile-model-name/specific-quant-name/
+
+    Args:
+        gguf_work_dir (str): Path to the GGUF working directory
+
+    Returns:
+        dict: Dictionary mapping display paths to full directory paths
+    """
+    local_models = {}
+
+    if not os.path.exists(gguf_work_dir):
+        print(yellow_text(f"GGUF work directory does not exist: {gguf_work_dir}"))
+        return local_models
+
+    print(f"Scanning directory: {gguf_work_dir}")
+
+    # Walk through the directory structure looking for .gguf files
+    for root, dirs, files in os.walk(gguf_work_dir):
+        gguf_files = [f for f in files if f.endswith('.gguf')]
+
+        if gguf_files:
+            print(f"Found {len(gguf_files)} GGUF files in: {root}")
+
+            # Create a relative path from the work directory
+            rel_path = os.path.relpath(root, gguf_work_dir)
+
+            if rel_path == '.':
+                display_name = f"Root directory ({len(gguf_files)} GGUF files)"
+            else:
+                # Just use the relative path as display name for now
+                display_name = f"{rel_path} ({len(gguf_files)} GGUF files)"
+
+            local_models[display_name] = root
+
+    print(f"Found {len(local_models)} directories with GGUF files")
+    return local_models
+
+
+def display_local_gguf_menu(local_models: dict) -> str:
+    """
+    Display available local GGUF models and get user selection.
+
+    Args:
+        local_models (dict): Dictionary mapping display names to directory paths
+
+    Returns:
+        str: Selected directory path, "download_new" for new download, or None for quit
+    """
+    if not local_models:
+        print(yellow_text("No local GGUF models found."))
+        return "download_new"
+
+    print("\nLocal GGUF models found:")
+    print("-" * 80)
+
+    # Simple alphabetical sorting
+    sorted_items = sorted(local_models.items())
+
+    for i, (display_name, model_path) in enumerate(sorted_items, 1):
+        print(f"{i:2d}. {display_name}")
+
+    # Add option to download new model
+    download_option = len(sorted_items) + 1
+    print(f"{download_option:2d}. Choose new from HF")
+
+    print("-" * 80)
+
+    while True:
+        try:
+            choice = input(f"Select a model (1-{download_option}) or 'q' to quit: ").strip()
+
+            if choice.lower() == 'q':
+                print("Exiting...")
+                return None
+
+            choice_num = int(choice)
+            if 1 <= choice_num <= len(sorted_items):
+                selected_item = sorted_items[choice_num - 1]
+                display_name, model_path = selected_item
+                print(f"Selected local model: {display_name}")
+                print(f"Using directory: {model_path}")
+                return model_path
+            elif choice_num == download_option:
+                print("Will download new model from HuggingFace...")
+                return "download_new"
+            else:
+                print(f"Please enter a number between 1 and {download_option}")
+
+        except ValueError:
+            print("Please enter a valid number or 'q' to quit")
+        except KeyboardInterrupt:
+            print("\nExiting...")
+            return None
+        except KeyboardInterrupt:
+            print("\nExiting...")
+            return None
+
+
+def download_or_select_gguf_model(model_repo: str, base_work_dir: str) -> str:
+    """
+    Allow user to select from local GGUF files or download new ones from HuggingFace.
+
+    Args:
+        model_repo (str): HuggingFace model repository (profile/model-name) - can be empty
+        base_work_dir (str): Base working directory for downloads
+
+    Returns:
+        str: Path to the final model directory, or None if failed
+    """
+
+    # First, scan for local GGUF models
+    print("\n🔍 Scanning for local GGUF models...")
+    local_models = scan_local_gguf_files(os.environ["GGUF_WORK_DIR"])
+
+    # Display menu with local models and option to download new
+    selected_path = display_local_gguf_menu(local_models)
+
+    if selected_path is None:
+        return None
+    elif selected_path == "download_new":
+        # User wants to download new model - need to get config files first
+        print("\n🤗 First, we need to download model configuration files...")
+        config_dir = download_model_configs(base_work_dir)
+
+        if not config_dir:
+            print(red_text("❌ Failed to download model configuration. Cannot proceed."))
+            return None
+
+        print(green_text("✓ Model configuration downloaded successfully"))
+
+        # Get the base model repository name for GGUF download
+        base_model_repo = None
+        if os.environ.get("NIM_MODEL_DIR"):
+            model_dir_name = os.path.basename(os.environ["NIM_MODEL_DIR"])
+            base_model_repo = model_dir_name.replace("-", "/")
+
+        # Now download GGUF files
+        return download_gguf_files(base_model_repo or "", base_work_dir)
+    else:
+        # User selected a local model
+        print(f"Using local model at: {selected_path}")
+
+        # Check if config files exist in the selected directory
+        config_files = ["config.json", "tokenizer.json", "tokenizer_config.json", "generation_config.json"]
+        missing_configs = []
+
+        for config_file in config_files:
+            if not os.path.exists(os.path.join(selected_path, config_file)):
+                missing_configs.append(config_file)
+
+        if missing_configs:
+            print(yellow_text(f"⚠️  Missing config files in selected directory: {', '.join(missing_configs)}"))
+
+            # If we don't have a base model config directory, we need to download configs
+            if not os.environ.get("NIM_MODEL_DIR") or not os.path.exists(os.environ["NIM_MODEL_DIR"]):
+                print("📥 Need to download configuration files first...")
+                config_dir = download_model_configs(base_work_dir)
+
+                if not config_dir:
+                    print(red_text("❌ Failed to download model configuration."))
+                    return None
+
+            # Copy config files from the base model directory
+            if os.environ.get("NIM_MODEL_DIR") and os.path.exists(os.environ["NIM_MODEL_DIR"]):
+                print("Copying configuration files...")
+                try:
+                    for config_file in missing_configs:
+                        src_path = os.path.join(os.environ["NIM_MODEL_DIR"], config_file)
+                        if os.path.exists(src_path):
+                            dst_path = os.path.join(selected_path, config_file)
+                            shutil.copy2(src_path, dst_path)
+                            print(green_text(f"✓ Copied {config_file}"))
+                        else:
+                            print(yellow_text(f"⚠️  {config_file} not found in base model directory"))
+
+                    print(green_text("✓ Configuration files copied successfully"))
+                except Exception as e:
+                    print(red_text(f"❌ Error copying config files: {e}"))
+                    return None
+        else:
+            print(green_text("✓ All configuration files present"))
+
+        return selected_path
+
+
 def download_gguf_files(model_repo: str, base_work_dir: str) -> str:
     """
     Download GGUF files from a HuggingFace model repository.
@@ -382,7 +570,7 @@ if __name__ == "__main__":
 
         # Then download GGUF files
         model_repo = input("Enter the base model repository name (used for config files): ").strip()
-        final_dir = download_gguf_files(model_repo, base_work_dir)
+        final_dir = download_or_select_gguf_model(model_repo, base_work_dir)
 
         if final_dir:
             print(green_text(f"\nComplete model ready at: {final_dir}"))
