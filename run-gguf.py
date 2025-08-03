@@ -76,12 +76,9 @@ print("\n🤗 Downloading HuggingFace model configuration...")
 config_dir = download_model_configs(base_work_dir)
 
 if config_dir:
-    os.environ["CONFIG_TEMP_DIR"] = config_dir
-    print(green_text(f"✓ Model configuration downloaded to: {config_dir}"))
     print(green_text("\n🎉 Setup completed successfully!"))
-    print(f"Base working directory: {base_work_dir}")
     print(f"Selected NIM version: {selected_version}")
-    print(f"Model config directory: {config_dir}")
+    print(f"Base Model config directory: {os.environ['NIM_MODEL_DIR']}")
 else:
     print(red_text("❌ Failed to download model configuration. Exiting."))
     exit(1)

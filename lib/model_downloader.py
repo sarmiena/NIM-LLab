@@ -1,6 +1,8 @@
 from huggingface_hub import hf_hub_download, list_repo_files
 from .colors import green_text, red_text, yellow_text
 import os
+import shutil
+import glob
 
 # Try to import RepositoryNotFoundError, fall back to general exception handling
 try:
@@ -37,7 +39,7 @@ def download_model_configs(base_work_dir: str) -> str:
             continue
 
         # Create temporary directory for this model
-        config_temp_dir = os.path.join(base_work_dir, "gguf_config_temp")
+        config_temp_dir = os.path.join("/tmp", "gguf_config_temp")
         os.makedirs(config_temp_dir, exist_ok=True)
 
         print(f"\nDownloading config files from {model_repo}...")
@@ -52,6 +54,7 @@ def download_model_configs(base_work_dir: str) -> str:
 
         # Find the actual paths of required files in the repository
         found_files = {}
+        
         try:
             # First, check if repository exists by trying to list files
             repo_files = []  # Initialize here
@@ -120,7 +123,17 @@ def download_model_configs(base_work_dir: str) -> str:
             else:
                 # All files downloaded successfully
                 print(green_text(f"\n✓ Successfully downloaded {len(downloaded_files)} config files"))
-                print(green_text(f"Files saved to: {config_temp_dir}"))
+                model_dir_name = model_repo.replace("/", "-")
+                os.environ["NIM_MODEL_DIR"] = os.path.join(os.environ["GGUF_WORK_DIR"], model_dir_name)
+                os.makedirs(os.environ["NIM_MODEL_DIR"], exist_ok=True)
+                shutil.copytree(config_temp_dir, os.environ["NIM_MODEL_DIR"], dirs_exist_ok=True)
+
+                for file_path in glob.glob(os.path.join(config_temp_dir, '*')):
+                    if os.path.isfile(file_path):
+                        os.remove(file_path)
+
+                print(f"Files saved to: {os.environ['NIM_MODEL_DIR']}")
+
                 return config_temp_dir
 
         except KeyboardInterrupt:
