@@ -4,6 +4,7 @@ import os
 import shutil
 import glob
 import re
+import time
 from collections import defaultdict
 
 # Try to import RepositoryNotFoundError, fall back to general exception handling
@@ -125,8 +126,11 @@ def download_model_configs(base_work_dir: str) -> str:
             else:
                 # All files downloaded successfully
                 print(green_text(f"\n✓ Successfully downloaded {len(downloaded_files)} config files"))
-                model_dir_name = model_repo.replace("/", "-")
-                os.environ["NIM_MODEL_DIR"] = os.path.join(os.environ["GGUF_WORK_DIR"], model_dir_name)
+
+                # Extract model name from repo (e.g., "meta-llama/Llama-3.2-3B-Instruct" -> "Llama-3.2-3B-Instruct")
+                model_name = model_repo.split("/")[-1]
+                os.environ["NIM_MODEL_DIR"] = os.path.join(base_work_dir, model_name)
+                os.environ["BASE_MODEL_REPO"] = model_repo  # Store the full repo path for README
                 os.makedirs(os.environ["NIM_MODEL_DIR"], exist_ok=True)
                 shutil.copytree(config_temp_dir, os.environ["NIM_MODEL_DIR"], dirs_exist_ok=True)
 
@@ -239,39 +243,39 @@ def display_gguf_menu(gguf_groups: dict) -> tuple:
             return None, None
 
 
-def scan_local_gguf_files(gguf_work_dir: str) -> dict:
+def scan_local_gguf_files(base_work_dir: str) -> dict:
     """
     Scan for existing GGUF files in the local working directory.
-    Expected structure: gguf_work_dir/profile-model-name/specific-quant-name/
+    Expected structure: workdir/{model_name}/{gguf_name}/{gguf_file_name}/
 
     Args:
-        gguf_work_dir (str): Path to the GGUF working directory
+        base_work_dir (str): Path to the base working directory
 
     Returns:
         dict: Dictionary mapping display paths to full directory paths
     """
     local_models = {}
 
-    if not os.path.exists(gguf_work_dir):
-        print(yellow_text(f"GGUF work directory does not exist: {gguf_work_dir}"))
+    if not os.path.exists(base_work_dir):
+        print(yellow_text(f"Work directory does not exist: {base_work_dir}"))
         return local_models
 
-    print(f"Scanning directory: {gguf_work_dir}")
+    print(f"Scanning directory: {base_work_dir}")
 
     # Walk through the directory structure looking for .gguf files
-    for root, dirs, files in os.walk(gguf_work_dir):
+    for root, dirs, files in os.walk(base_work_dir):
         gguf_files = [f for f in files if f.endswith('.gguf')]
 
         if gguf_files:
             print(f"Found {len(gguf_files)} GGUF files in: {root}")
 
             # Create a relative path from the work directory
-            rel_path = os.path.relpath(root, gguf_work_dir)
+            rel_path = os.path.relpath(root, base_work_dir)
 
             if rel_path == '.':
                 display_name = f"Root directory ({len(gguf_files)} GGUF files)"
             else:
-                # Just use the relative path as display name for now
+                # Use the relative path as display name
                 display_name = f"{rel_path} ({len(gguf_files)} GGUF files)"
 
             local_models[display_name] = root
@@ -335,9 +339,6 @@ def display_local_gguf_menu(local_models: dict) -> str:
         except KeyboardInterrupt:
             print("\nExiting...")
             return None
-        except KeyboardInterrupt:
-            print("\nExiting...")
-            return None
 
 
 def download_or_select_gguf_model(model_repo: str, base_work_dir: str) -> str:
@@ -352,9 +353,9 @@ def download_or_select_gguf_model(model_repo: str, base_work_dir: str) -> str:
         str: Path to the final model directory, or None if failed
     """
 
-    # First, scan for local GGUF models
+    # First, scan for local GGUF models in the base work directory (new structure)
     print("\n🔍 Scanning for local GGUF models...")
-    local_models = scan_local_gguf_files(os.environ["GGUF_WORK_DIR"])
+    local_models = scan_local_gguf_files(base_work_dir)
 
     # Display menu with local models and option to download new
     selected_path = display_local_gguf_menu(local_models)
@@ -376,7 +377,8 @@ def download_or_select_gguf_model(model_repo: str, base_work_dir: str) -> str:
         base_model_repo = None
         if os.environ.get("NIM_MODEL_DIR"):
             model_dir_name = os.path.basename(os.environ["NIM_MODEL_DIR"])
-            base_model_repo = model_dir_name.replace("-", "/")
+            # Since we're using model name directly now, we can use it as is
+            base_model_repo = model_dir_name
 
         # Now download GGUF files
         return download_gguf_files(base_model_repo or "", base_work_dir)
@@ -427,12 +429,14 @@ def download_or_select_gguf_model(model_repo: str, base_work_dir: str) -> str:
         return selected_path
 
 
-def download_gguf_files(model_repo: str, base_work_dir: str) -> str:
+def download_gguf_files(model_name: str, base_work_dir: str) -> str:
     """
     Download GGUF files from a HuggingFace model repository.
+    New structure: ./workdir/{model_name}/{gguf_variant}/
+    Creates a README with source repository information.
 
     Args:
-        model_repo (str): HuggingFace model repository (profile/model-name)
+        model_name (str): Model name (used for directory structure)
         base_work_dir (str): Base working directory for downloads
 
     Returns:
@@ -486,11 +490,24 @@ def download_gguf_files(model_repo: str, base_work_dir: str) -> str:
             if not selected_display:
                 return None
 
-            # Create directory structure: profile-model-name/selected-file-name/
-            model_dir_name = gguf_repo.replace("/", "-")
-            # Remove .gguf extension for directory name
-            file_dir_name = selected_display.replace(".gguf", "")
-            final_model_dir = os.path.join(os.environ["GGUF_WORK_DIR"], model_dir_name, file_dir_name)
+            # New directory structure: ./workdir/{model_name}/{gguf_variant}/
+            # Extract GGUF repo author (e.g., "bartowski/Llama-3.2-3B-Instruct-GGUF" -> "bartowski")
+            gguf_author = gguf_repo.split("/")[0]
+
+            # Remove .gguf extension for quantization info (e.g., "model-Q4_K_M.gguf" -> "model-Q4_K_M")
+            quantization = selected_display.replace(".gguf", "")
+            # Extract just the quantization part (everything after the last dash, if it looks like a quantization)
+            if '-' in quantization:
+                quant_parts = quantization.split('-')
+                # Look for quantization patterns like Q4_K_M, Q8_0, etc.
+                for part in reversed(quant_parts):
+                    if part.startswith('Q') and ('_' in part or part[1:].isdigit()):
+                        quantization = part
+                        break
+
+            # Build the final path: workdir/{model_name}/{author}-{quantization}/
+            gguf_variant = f"{gguf_author}-{quantization}"
+            final_model_dir = os.path.join(base_work_dir, model_name, gguf_variant)
 
             os.makedirs(final_model_dir, exist_ok=True)
             print(f"Created directory: {final_model_dir}")
@@ -520,6 +537,40 @@ def download_gguf_files(model_repo: str, base_work_dir: str) -> str:
             else:
                 # All GGUF files downloaded successfully
                 print(green_text(f"\n✓ Successfully downloaded {len(downloaded_files)} GGUF file(s)"))
+
+                # Create README with source information
+                readme_content = f"""# Model Information
+
+## Source Repositories
+- **Base Model**: {os.environ.get('BASE_MODEL_REPO', 'Unknown')}
+- **GGUF Repository**: {gguf_repo}
+- **HuggingFace URL**: https://huggingface.co/{gguf_repo}
+
+## Downloaded Files
+- **Selected Variant**: {selected_display}
+- **Downloaded Files**: {len(downloaded_files)} file(s)
+- **File Names**: {', '.join([os.path.basename(f) for f in downloaded_files])}
+
+## Directory Structure
+- **Model Name**: {model_name}
+- **GGUF Variant**: {gguf_variant}
+- **Full Path**: {final_model_dir}
+
+## Download Information
+- **Downloaded**: {time.strftime('%Y-%m-%d %H:%M:%S')}
+- **Tool**: NIM-LLab model downloader
+
+---
+This directory contains the complete model files needed for NIM deployment.
+"""
+
+                readme_path = os.path.join(final_model_dir, "README.md")
+                try:
+                    with open(readme_path, 'w', encoding='utf-8') as f:
+                        f.write(readme_content)
+                    print(green_text("✓ Created README.md with source information"))
+                except Exception as e:
+                    print(yellow_text(f"⚠️  Could not create README.md: {e}"))
 
                 # Copy config files from the base model directory to final directory
                 if os.environ.get("NIM_MODEL_DIR") and os.path.exists(os.environ["NIM_MODEL_DIR"]):

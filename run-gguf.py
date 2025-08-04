@@ -57,7 +57,6 @@ os.environ["BASE_WORK_DIR"] = base_work_dir
 
 os.environ["CONTAINER_NAME"] = "GGUF-NIM"
 os.environ["LOCAL_NIM_CACHE"] = os.path.join(base_work_dir, ".cache/nim")
-os.environ["GGUF_WORK_DIR"] = os.path.join(base_work_dir, "gguf_models")
 
 # Create necessary directories
 print("Creating necessary directories...")
@@ -65,8 +64,8 @@ try:
     os.makedirs(os.environ["LOCAL_NIM_CACHE"], exist_ok=True)
     print(green_text(f"✓ Cache directory: {os.environ['LOCAL_NIM_CACHE']}"))
 
-    os.makedirs(os.environ["GGUF_WORK_DIR"], exist_ok=True)
-    print(green_text(f"✓ GGUF models directory: {os.environ['GGUF_WORK_DIR']}"))
+    os.makedirs(base_work_dir, exist_ok=True)
+    print(green_text(f"✓ Base work directory: {base_work_dir}"))
 
 except Exception as e:
     print(red_text(f"❌ Failed to create directories: {e}"))
@@ -74,8 +73,9 @@ except Exception as e:
 
 print("\n📦 Selecting GGUF model...")
 print(yellow_text("You can use an existing local GGUF model or download a new one from HuggingFace."))
+print(yellow_text("New structure: workdir/{model_name}/{author-quantization}/"))
 
-# First scan for local models before asking for any HuggingFace repo
+# Scan for local models and allow selection or download new
 final_model_dir = download_or_select_gguf_model("", base_work_dir)
 
 if final_model_dir:
@@ -96,6 +96,7 @@ if final_model_dir:
         print(f"• Base model configs: {os.environ['NIM_MODEL_DIR']}")
     print(f"• Complete model (configs + GGUF): {final_model_dir}")
     print(f"• NIM Docker version: {selected_version}")
+    print(f"• Directory structure: workdir/{os.path.basename(os.path.dirname(final_model_dir))}/{os.path.basename(final_model_dir)}")
 
     print(green_text("\n✅ Ready to start your GGUF NIM service!"))
 
