@@ -100,6 +100,83 @@ if final_model_dir:
 
     print(green_text("\n✅ Ready to start your GGUF NIM service!"))
 
+    # Deploy the model with Docker
+    print(yellow_text("\n🚀 Deploying GGUF NIM container..."))
+
+    # Extract quantization info from the final model directory name
+    quantization = os.path.basename(final_model_dir).split('-')[-1]  # e.g., "bartowski-Q4_K_M" -> "Q4_K_M"
+
+    # Extract base model name for the served model name
+    base_model_name = os.path.basename(os.path.dirname(final_model_dir))  # e.g., "Llama-3.2-3B-Instruct"
+
+    # Build the NIM image name
+    nim_image = f"nvcr.io/nim/nvidia/llm-nim:{selected_version}"
+
+    print(f"Deploying {quantization} quantization")
+    print(f"Model: {base_model_name}")
+    print(f"Docker image: {nim_image}")
+
+    # Build the docker run command
+    docker_cmd = [
+        'docker', 'run', '-it', '--rm',
+        '--name', os.environ["CONTAINER_NAME"],
+        '--runtime=nvidia',
+        '--gpus', 'all',
+        '--shm-size=16GB',
+        '-e', f'NIM_MODEL_NAME=/opt/models/gguf_model',
+        '-e', f'NIM_SERVED_MODEL_NAME={base_model_name}-{quantization}',
+        '-v', f'{final_model_dir}:/opt/models/gguf_model',
+        '-v', f'{os.environ["LOCAL_NIM_CACHE"]}:/opt/nim/.cache',
+        '-u', f'{os.getuid()}',
+        '-p', '8000:8000',
+        '-d',
+        nim_image
+    ]
+
+    print(yellow_text("Starting Docker container..."))
+    print(f"Command: {' '.join(docker_cmd)}")
+
+    # Run the docker command
+    result = run_command(docker_cmd)
+
+    if result['success']:
+        container_id = result['stdout'].strip()
+        print(green_text(f"✓ Container started successfully!"))
+        print(f"Container ID: {container_id}")
+        print(f"Container name: {os.environ['CONTAINER_NAME']}")
+
+        print(yellow_text("\n⏳ Waiting for NIM service to be ready..."))
+        print("This may take several minutes for the first run...")
+
+        # Check if service is ready using log monitoring
+        if check_service_ready_from_logs(os.environ["CONTAINER_NAME"], print_logs=True, timeout=900):
+            print(green_text("\n🎉 NIM service is ready!"))
+            print(f"API endpoint: http://localhost:8000")
+            print(f"Model: {base_model_name}-{quantization}")
+            print(f"Health check: http://localhost:8000/v1/health/ready")
+
+            # Optional: Test the service
+            test_prompt = input("\nWould you like to test the service with a prompt? (y/n): ").strip().lower()
+            if test_prompt == 'y':
+                user_prompt = input("Enter your test prompt: ").strip()
+                if user_prompt:
+                    print(yellow_text("\n🤖 Generating response..."))
+                    response = generate_text(f"{base_model_name}-{quantization}", user_prompt)
+                    if response:
+                        print(green_text("\n✅ Response:"))
+                        print(response)
+                    else:
+                        print(red_text("❌ Failed to generate response"))
+
+        else:
+            print(red_text("\n❌ Service failed to start properly"))
+            print("Check container logs with: docker logs " + os.environ["CONTAINER_NAME"])
+
+    else:
+        print(red_text(f"❌ Failed to start container: {result.get('stderr', result.get('error', 'Unknown error'))}"))
+        print("Make sure Docker is running and you have NVIDIA Container Runtime installed")
+        exit(1)
+
 else:
     print(red_text("❌ Failed to set up model. Exiting."))
     exit(1)
