@@ -121,14 +121,16 @@ if final_model_dir:
         'docker', 'run', '-it', '--rm',
         '--name', os.environ["CONTAINER_NAME"],
         '--runtime=nvidia',
-        '--gpus', 'all',
-        '--shm-size=16GB',
+        '--gpus', 'device=0',
+        '--shm-size=32GB',
         '-e', f'NIM_MODEL_NAME=/opt/models/gguf_model',
         '-e', f'NIM_SERVED_MODEL_NAME={base_model_name}-{quantization}',
         '-v', f'{final_model_dir}:/opt/models/gguf_model',
         '-v', f'{os.environ["LOCAL_NIM_CACHE"]}:/opt/nim/.cache',
+        '-v', f'{os.getcwd()}/start:/opt/start',  # Mount our start directory
         '-u', f'{os.getuid()}',
         '-p', '8000:8000',
+        '--entrypoint', '/opt/start/fix_and_start.sh',  # Use our script as entrypoint
         '-d',
         nim_image
     ]

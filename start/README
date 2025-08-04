@@ -1,0 +1,1 @@
+There is a bug with GGUF in NIM's way of reading/sorting .gguf files. It was picking random one from the list, which made things not work
